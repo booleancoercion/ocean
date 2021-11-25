@@ -45,5 +45,8 @@ fn main() {
         SubCommand::Clean => ocean::clean(),
     };
 
-    let _ = result;
+    match result {
+        Ok(()) => (),
+        Err(why) => ocean::error!("{}", why),
+    }
 }
