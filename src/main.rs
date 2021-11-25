@@ -40,8 +40,14 @@ fn main() {
     let result = match opts.subcommand {
         SubCommand::New { project_name } => ocean::new(project_name),
         SubCommand::Init => ocean::init(),
-        SubCommand::Run { arguments, verbose } => ocean::run(arguments, verbose),
-        SubCommand::Build { verbose } => ocean::build(verbose),
+        SubCommand::Run { arguments, verbose } => {
+            let config = ocean::get_project_details().unwrap();
+            ocean::run(arguments, verbose, &config)
+        }
+        SubCommand::Build { verbose } => {
+            let config = ocean::get_project_details().unwrap();
+            ocean::build(verbose, &config).map(|_| ())
+        }
         SubCommand::Clean => ocean::clean(),
     };
 
