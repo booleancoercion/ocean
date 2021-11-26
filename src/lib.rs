@@ -1,5 +1,8 @@
+mod config;
+pub use config::{Config, ConfigHost};
+use config::{Manifest, Package};
+
 use cc::Build;
-use serde_derive::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::env;
@@ -28,21 +31,6 @@ pub enum Error {
 
     #[error("error ({0})")]
     Other(String),
-}
-
-#[derive(Deserialize, Serialize)]
-struct Manifest {
-    package: Package,
-}
-
-#[derive(Deserialize, Serialize)]
-struct Package {
-    name: String,
-}
-
-pub struct Config {
-    manifest: Manifest,
-    root: PathBuf,
 }
 
 fn create_default_project_in_directory(mut path: PathBuf, name: String) -> Result<(), Error> {
@@ -105,45 +93,6 @@ pub fn init() -> Result<(), Error> {
     create_default_project_in_directory(PathBuf::from("./"), project_name)
 }
 
-fn dir_contains_manifest_file<P: AsRef<Path>>(path: P) -> Result<bool, io::Error> {
-    for item in fs::read_dir(path)? {
-        let item = item?;
-        if item.file_type()?.is_file() || item.file_name() == "Ocean.toml" {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-fn get_project_root() -> Result<Option<PathBuf>, io::Error> {
-    let mut current_path = env::current_dir()?;
-
-    loop {
-        if dir_contains_manifest_file(&current_path)? {
-            break Ok(Some(current_path));
-        }
-        if !current_path.pop() {
-            break Ok(None);
-        }
-    }
-}
-
-pub fn get_project_details() -> Result<Config, Error> {
-    let root = get_project_root()?;
-
-    match root {
-        Some(root) => {
-            let contents = fs::read_to_string(&root.join("Ocean.toml"))?;
-            Ok(Config {
-                manifest: toml::from_str(&contents)?,
-                root,
-            })
-        }
-        None => Err(Error::Other("not inside a project".into())),
-    }
-}
-
 fn get_source_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>, io::Error> {
     let mut files = vec![];
     for item in dir.read_dir()? {
@@ -156,15 +105,16 @@ fn get_source_files_in_dir(dir: &Path) -> Result<Vec<PathBuf>, io::Error> {
     Ok(files)
 }
 
-pub fn run(args: Vec<OsString>, verbose: bool, config: &Config) -> Result<(), Error> {
-    let status = build(verbose, config)?;
+pub fn run(args: Vec<OsString>, verbose: bool, chost: ConfigHost) -> Result<(), Error> {
+    let config = chost.get_config()?;
+    let status = build_with_config(verbose, &config)?;
     if status.success() {
         println!(
             "ocean: info: compilation successful. executing program `{}`:\n",
             config.manifest.package.name
         );
 
-        let mut path = config.root.join("target");
+        let mut path = config.root.join("artifacts");
         if cfg!(windows) {
             path.push(&format!("{}.exe", config.manifest.package.name));
         } else {
@@ -176,12 +126,17 @@ pub fn run(args: Vec<OsString>, verbose: bool, config: &Config) -> Result<(), Er
     Ok(())
 }
 
-pub fn build(verbose: bool, config: &Config) -> Result<ExitStatus, Error> {
+pub fn build(verbose: bool, chost: ConfigHost) -> Result<(), Error> {
+    let config = chost.get_config()?;
+    build_with_config(verbose, &config).map(|_| ())
+}
+
+fn build_with_config(_verbose: bool, config: &Config) -> Result<ExitStatus, Error> {
     let Config { manifest, root } = config;
 
-    let target_dir = root.join("target");
-    if !target_dir.exists() {
-        fs::create_dir(&target_dir)?;
+    let art_dir = root.join("artifacts");
+    if !art_dir.exists() {
+        fs::create_dir(&art_dir)?;
     }
 
     let src = root.join("src");
@@ -206,11 +161,18 @@ pub fn build(verbose: bool, config: &Config) -> Result<ExitStatus, Error> {
         command.args(&["-o", &manifest.package.name]);
     }
     command.args(&files);
-    command.current_dir(target_dir);
+    command.current_dir(art_dir);
 
     Ok(command.status()?)
 }
 
-pub fn clean() -> Result<(), Error> {
-    todo!()
+pub fn clean(chost: ConfigHost) -> Result<(), Error> {
+    let config = chost.get_config()?;
+    let art = config.root.join("artifacts");
+
+    if art.exists() {
+        fs::remove_dir_all(&art)?;
+    }
+
+    Ok(())
 }

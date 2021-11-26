@@ -1,4 +1,5 @@
 use clap::Parser;
+use ocean::ConfigHost;
 use std::ffi::OsString;
 
 /// A universal C compiler shortcut for quick and dirty development, inspired by Cargo.
@@ -37,18 +38,14 @@ enum SubCommand {
 fn main() {
     let opts = Opts::parse();
 
+    let chost = ConfigHost::default();
+
     let result = match opts.subcommand {
         SubCommand::New { project_name } => ocean::new(project_name),
         SubCommand::Init => ocean::init(),
-        SubCommand::Run { arguments, verbose } => {
-            let config = ocean::get_project_details().unwrap();
-            ocean::run(arguments, verbose, &config)
-        }
-        SubCommand::Build { verbose } => {
-            let config = ocean::get_project_details().unwrap();
-            ocean::build(verbose, &config).map(|_| ())
-        }
-        SubCommand::Clean => ocean::clean(),
+        SubCommand::Run { arguments, verbose } => ocean::run(arguments, verbose, chost),
+        SubCommand::Build { verbose } => ocean::build(verbose, chost),
+        SubCommand::Clean => ocean::clean(chost),
     };
 
     match result {
