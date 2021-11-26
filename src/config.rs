@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{error, Error, OnError};
 
 use serde_derive::{Deserialize, Serialize};
 
@@ -28,6 +28,7 @@ impl ConfigHost {
     /// Potentially gets the config, and prints a relevant error message in case that's not possible.
     pub fn get_config(self) -> Result<Config, Error> {
         self.config
+            .on_err(|| error!("could not open or parse config file."))
     }
 
     fn generate_config() -> Result<Config, Error> {

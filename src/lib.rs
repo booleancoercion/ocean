@@ -1,5 +1,9 @@
 mod config;
+pub mod print;
+
 pub use config::{Config, ConfigHost};
+pub use print::{error, info, OnError};
+
 use config::{Manifest, Package};
 
 use cc::Build;
@@ -13,13 +17,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 const TARGET: &str = env!("TARGET");
-
-#[macro_export]
-macro_rules! error {
-    ($($arg:tt)*) => {
-        eprintln!("ocean: error: {}", &format!($($arg)*));
-    };
-}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -39,30 +36,27 @@ fn create_default_project_in_directory(mut path: PathBuf, name: String) -> Resul
         .create_new(true)
         .write(true)
         .open(&path)
-        .map_err(|err| {
-            error!("Unable to create the `Ocean.toml` file.");
-            err
-        })?;
+        .on_err(|| error!("could not create the `Ocean.toml` file."))?;
 
     let manifest = Manifest {
         package: Package { name },
     };
-    writeln!(&mut file, "{}", toml::to_string_pretty(&manifest).unwrap()).map_err(|err| {
-        error!("Unable to write to the `Ocean.toml` file.");
-        err
-    })?;
+    writeln!(&mut file, "{}", toml::to_string_pretty(&manifest).unwrap())
+        .on_err(|| error!("could not write to the `Ocean.toml` file."))?;
 
     path.pop();
     path.push("src/headers");
-    fs::create_dir_all(&path)?;
+    fs::create_dir_all(&path).on_err(|| error!("could not create source directories."))?;
 
     path.pop();
     path.push("main.c");
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&path)?;
-    writeln!(&mut file, "int main(void) {{\n    return 0;\n}}")?;
+        .open(&path)
+        .on_err(|| error!("could not create file src/main.c"))?;
+    writeln!(&mut file, "int main(void) {{\n    return 0;\n}}")
+        .on_err(|| error!("could not write to src/main.c"))?;
 
     Ok(())
 }
@@ -70,20 +64,15 @@ fn create_default_project_in_directory(mut path: PathBuf, name: String) -> Resul
 pub fn new(project_name: String) -> Result<(), Error> {
     let mut path = PathBuf::from("./");
     path.push(&project_name);
-    fs::create_dir(&path).map_err(|err| {
-        error!("Could not create a new directory `{}`.", path.display());
-        err
-    })?;
+    fs::create_dir(&path)
+        .on_err(|| error!("could not create a new directory `{}`.", path.display()))?;
 
     create_default_project_in_directory(path, project_name)
 }
 
 pub fn init() -> Result<(), Error> {
     let project_name = env::current_dir()
-        .map_err(|err| {
-            error!("Couldn't access the current directory.");
-            err
-        })?
+        .on_err(|| error!("could not access the current directory."))?
         .file_name()
         .ok_or_else(|| Error::Other("current directory has no name".into()))?
         .to_str()
@@ -109,10 +98,7 @@ pub fn run(args: Vec<OsString>, verbose: bool, chost: ConfigHost) -> Result<(), 
     let config = chost.get_config()?;
     let status = build_with_config(verbose, &config)?;
     if status.success() {
-        println!(
-            "ocean: info: compilation successful. executing program `{}`:\n",
-            config.manifest.package.name
-        );
+        info!("executing program `{}`\n", config.manifest.package.name);
 
         let mut path = config.root.join("artifacts");
         if cfg!(windows) {
@@ -120,10 +106,21 @@ pub fn run(args: Vec<OsString>, verbose: bool, chost: ConfigHost) -> Result<(), 
         } else {
             path.push(&config.manifest.package.name);
         }
-        let _status = Command::new(path).args(&args).status()?;
-    }
+        let status = Command::new(path).args(&args).status()?;
+        if !status.success() {
+            error!("process didn't exit successfully");
+            if let Some(code) = status.code() {
+                info!("exit code: {}", code);
+            }
+        }
 
-    Ok(())
+        Ok(())
+    } else {
+        error!("cannot execute program. aborting...");
+        Err(Error::Other(
+            "compilation failure; cannot execute program".into(),
+        ))
+    }
 }
 
 pub fn build(verbose: bool, chost: ConfigHost) -> Result<(), Error> {
@@ -136,13 +133,14 @@ fn build_with_config(_verbose: bool, config: &Config) -> Result<ExitStatus, Erro
 
     let art_dir = root.join("artifacts");
     if !art_dir.exists() {
-        fs::create_dir(&art_dir)?;
+        fs::create_dir(&art_dir).on_err(|| error!("could not create artifact directory."))?;
     }
 
     let src = root.join("src");
     let headers = src.join("headers");
 
-    let files = get_source_files_in_dir(&src)?;
+    let files =
+        get_source_files_in_dir(&src).on_err(|| error!("could not gather source file names"))?;
 
     let tool = Build::new()
         .opt_level(1)
@@ -163,7 +161,14 @@ fn build_with_config(_verbose: bool, config: &Config) -> Result<ExitStatus, Erro
     command.args(&files);
     command.current_dir(art_dir);
 
-    Ok(command.status()?)
+    let status = command.status().unwrap();
+    if status.success() {
+        info!("compilation successful.")
+    } else {
+        error!("compilation failed.")
+    }
+
+    Ok(status)
 }
 
 pub fn clean(chost: ConfigHost) -> Result<(), Error> {
@@ -171,7 +176,7 @@ pub fn clean(chost: ConfigHost) -> Result<(), Error> {
     let art = config.root.join("artifacts");
 
     if art.exists() {
-        fs::remove_dir_all(&art)?;
+        fs::remove_dir_all(&art).on_err(|| error!("could not remove artifact directory."))?;
     }
 
     Ok(())
